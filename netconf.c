@@ -1072,10 +1072,11 @@ netconf_handle_session (int fd)
 }
 
 gboolean
-netconf_init (const char *path, const char *cp, const char *rm)
+netconf_init (const char *path, const char *supported,
+              const char *cp, const char *rm)
 {
     /* Load Data Models */
-    g_schema = sch_load (path);
+    g_schema = sch_load_with_model_list_filename (path, supported);
     if (!g_schema)
     {
         return false;
