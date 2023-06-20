@@ -48,14 +48,17 @@ static GSList *open_sessions_list = NULL;
 static void
 free_open_sessions_list (void)
 {
-    GSList *iter = g_slist_last (open_sessions_list);
-    while (iter)
+    if (open_sessions_list)
     {
-        open_sessions_list = g_slist_remove (open_sessions_list, iter);
-        g_free (iter->data);
-        iter = g_slist_last (open_sessions_list);
+        for (guint i = 0; i < g_slist_length (open_sessions_list); i++)
+        {
+            struct netconf_session *nc_session =
+                (struct netconf_session *) g_slist_nth_data (open_sessions_list, i);
+            if (nc_session)
+                g_free (nc_session);
+        }
+        g_slist_free (open_sessions_list);
     }
-    g_slist_free (open_sessions_list);
 }
 
 /* Remove specified netconf session from open_sessions_list */
