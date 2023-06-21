@@ -140,9 +140,6 @@ main (int argc, char *argv[])
     /* Cleanup Unix socket */
     unlink (unix_path);
 
-    /* Wait until the thread pool is done */
-    g_thread_join(g_thread);
-
     /* Shutdown */
     netconf_shutdown ();
     apteryx_shutdown ();
