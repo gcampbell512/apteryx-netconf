@@ -52,6 +52,18 @@ db_default = [
     ('/t2:test/settings/priority', '2'),
     # Non-default namespace augmented path
     ('/t2:test/settings/speed', '2'),
+    # Data for with-defaults testing
+    ('/interfaces/interface/eth0/name', 'eth0'),
+    ('/interfaces/interface/eth0/mtu', '8192'),
+    ('/interfaces/interface/eth0/status', 'up'),
+    ('/interfaces/interface/eth1/name', 'eth1'),
+    ('/interfaces/interface/eth1/status', 'up'),
+    ('/interfaces/interface/eth2/name', 'eth2'),
+    ('/interfaces/interface/eth2/mtu', '9000'),
+    ('/interfaces/interface/eth2/status', 'not feeling so good'),
+    ('/interfaces/interface/eth3/name', 'eth3'),
+    ('/interfaces/interface/eth3/mtu', '1500'),
+    ('/interfaces/interface/eth3/status', 'waking up'),
 ]
 
 
@@ -129,6 +141,22 @@ def _get_test_with_filter(f_value, expected=None, f_type='subtree'):
     """
     m = connect()
     xml = m.get(filter=(f_type, f_value)).data
+    print(etree.tostring(xml, pretty_print=True, encoding="unicode"))
+    if expected:
+        expected = toXML(expected)
+        assert diffXML(xml, expected) is None
+    m.close_session()
+    return xml
+
+
+def _get_test_with_defaults_and_filter(f_value, w_d_value, expected=None, f_type='subtree'):
+    """
+    Perform a get with the given filter, which can be of type 'subtree' or 'xpath'. If expectede
+    respose is given, assert that it was the same as the response from the get. Return the response
+    so the caller can perform its own tests.
+    """
+    m = connect()
+    xml = m.get(filter=(f_type, f_value), with_defaults=(w_d_value)).data
     print(etree.tostring(xml, pretty_print=True, encoding="unicode"))
     if expected:
         expected = toXML(expected)
