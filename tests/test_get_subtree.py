@@ -160,6 +160,21 @@ def test_get_subtree_node_ns_aug_other_prefix():
     _get_test_with_filter(select, expected)
 
 
+def test_get_subtree_empty():
+    apteryx_set("/test/settings/empty", "empty")
+    select = '<test><settings><empty/></settings></test>'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <test>
+        <settings>
+            <empty></empty>
+        </settings>
+    </test>
+</nc:data>
+    """
+    _get_test_with_filter(select, expected)
+
+
 def test_get_subtree_trunk():
     select = '<test><settings/></test>'
     expected = """
