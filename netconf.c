@@ -312,6 +312,71 @@ schema_set_model_information (xmlNode * cap)
 }
 
 static bool
+validate_hello (char *buffer, int buf_len)
+{
+    xmlDoc *doc = NULL;
+    xmlNode *root;
+    xmlNode *node;
+    xmlNode *cap_node;
+    xmlChar *cap;
+    bool found_base11 = false;
+
+    doc = xmlParseMemory (buffer, buf_len);
+    if (!doc)
+    {
+        ERROR ("XML: Invalid hello message\n");
+        return false;
+    }
+    root = xmlDocGetRootElement (doc);
+    if (!root || g_strcmp0 ((char *) root->name, "hello") != 0)
+    {
+        ERROR ("XML: No root HELLO element\n");
+        xmlFreeDoc (doc);
+        return false;
+    }
+    node = xmlFirstElementChild (root);
+    if (!node || g_strcmp0 ((char *) node->name, "capabilities") != 0)
+    {
+        ERROR ("XML: No capabilities element in HELLO\n");
+        xmlFreeDoc (doc);
+        return false;
+    }
+
+    /* Check capabilities - we want to see base:1.1 */
+    for (cap_node = xmlFirstElementChild (node); cap_node; cap_node = xmlNextElementSibling (cap_node))
+    {
+        if (g_strcmp0 ((char *) cap_node->name, "capability") == 0)
+        {
+            cap = xmlNodeGetContent (cap_node);
+            if (cap)
+            {
+                if (g_strcmp0 ((char *) cap, "urn:ietf:params:netconf:base:1.1") == 0)
+                {
+                    found_base11 = true;
+                }
+                xmlFree (cap);
+                if (found_base11)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (found_base11)
+    {
+        VERBOSE ("Received valid hello message\n");
+    }
+    else
+    {
+        ERROR ("NETCONF: No compatible base version found\n");
+    }
+    xmlFreeDoc (doc);
+
+    return found_base11;
+}
+
+static bool
 handle_hello (struct netconf_session *session)
 {
     bool ret = true;
@@ -343,24 +408,10 @@ handle_hello (struct netconf_session *session)
     }
 
     /* Validate hello */
-    doc = xmlParseMemory (buffer, (endpt - buffer));
-    if (!doc)
+    if (!validate_hello (buffer, (endpt - buffer)))
     {
-        ERROR ("XML: Invalid hello message\n");
         return false;
     }
-    root = xmlDocGetRootElement (doc);
-    if (!root || g_strcmp0 ((char *) root->name, "hello") != 0)
-    {
-        ERROR ("XML: No root HELLO element\n");
-        xmlFreeDoc (doc);
-        return len;
-    }
-    // TODO check capabilities
-    // :base:1.1
-
-    VERBOSE ("Received valid hello message\n");
-    xmlFreeDoc (doc);
 
     /* Generate reply */
     doc = create_rpc (BAD_CAST "hello", NULL);
