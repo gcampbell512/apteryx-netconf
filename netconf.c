@@ -581,6 +581,12 @@ handle_get (struct netconf_session *session, xmlNode * rpc, gboolean config_only
         else if (g_strcmp0 ((char *) node->name, "filter") == 0)
         {
             attr = (char *) xmlGetProp (node, BAD_CAST "type");
+
+            /* Default type is "subtree" */
+            if (attr == NULL)
+            {
+                attr = g_strdup ("subtree");    /* for the later free */
+            }
             if (g_strcmp0 (attr, "xpath") == 0)
             {
                 free (attr);
