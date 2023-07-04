@@ -172,7 +172,7 @@ def test_get_xpath_list_trunk():
 
 
 def test_get_xpath_list_select_one_trunk():
-    xpath = "/test/animals/animal[name='cat']"
+    xpath = "/test:test/animals/animal[name='cat']"
     expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
     <test xmlns="http://test.com/ns/yang/testing">
@@ -189,13 +189,12 @@ def test_get_xpath_list_select_one_trunk():
 
 
 def test_get_xpath_list_select_one_parameter():
-    xpath = "/test/animals/animal[name='cat']/type"
+    xpath = "/test:test/animals/animal[name='cat']/type"
     expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
     <test xmlns="http://test.com/ns/yang/testing">
         <animals>
             <animal>
-                <name>cat</name>
                 <type>big</type>
             </animal>
         </animals>
@@ -205,14 +204,13 @@ def test_get_xpath_list_select_one_parameter():
     _get_test_with_filter(xpath, expected, f_type='xpath')
 
 
-def test_xpath_query_multi():
-    xpath = ("/test/animals/animal[name='cat']/type | /test/animals/animal[name='dog']/colour")
+def test_get_xpath_query_multi():
+    xpath = ("/test:test/animals/animal[name='cat']/type | /test:test/animals/animal[name='dog']/colour")
     expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
     <test xmlns="http://test.com/ns/yang/testing">
         <animals>
             <animal>
-                <name>cat</name>
                 <type>big</type>
             </animal>
         </animals>
@@ -220,7 +218,6 @@ def test_xpath_query_multi():
     <test xmlns="http://test.com/ns/yang/testing">
         <animals>
             <animal>
-                <name>dog</name>
                 <colour>brown</colour>
             </animal>
         </animals>
@@ -230,8 +227,166 @@ def test_xpath_query_multi():
     _get_test_with_filter(xpath, expected, f_type='xpath')
 
 
-def test_get_multi_xpath_select_multi():
-    xpath = ("/test/animals/animal[name='cat']/type | /interfaces/interface[name='eth2']/mtu")
+def test_get_xpath_multi_xpath_select_multi():
+    xpath = ("/test:test/animals/animal[name='cat']/type | /exam:interfaces/interface[name='eth2']/mtu")
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test xmlns="http://test.com/ns/yang/testing">
+    <animals>
+      <animal>
+        <type>big</type>
+      </animal>
+    </animals>
+  </test>
+  <interfaces xmlns="http://example.com/ns/interfaces">
+    <interface>
+      <mtu>9000</mtu>
+    </interface>
+  </interfaces>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, f_type='xpath')
+
+
+def test_get_xpath_with_slash_slash():
+    xpath = '//animal'
+    nspace = 'xmlns:test="http://test.com/ns/yang/testing"'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test xmlns="http://test.com/ns/yang/testing">
+    <animals>
+      <animal>
+        <name>cat</name>
+        <type>big</type>
+      </animal>
+      <animal>
+        <name>dog</name>
+        <colour>brown</colour>
+      </animal>
+      <animal>
+        <name>hamster</name>
+        <type>little</type>
+        <food>
+          <name>banana</name>
+          <type>fruit</type>
+        </food>
+        <food>
+          <name>nuts</name>
+          <type>kibble</type>
+        </food>
+      </animal>
+      <animal>
+        <name>mouse</name>
+        <type>little</type>
+        <colour>grey</colour>
+      </animal>
+      <animal>
+        <name>parrot</name>
+        <type>big</type>
+        <colour>blue</colour>
+      </animal>
+    </animals>
+  </test>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, nspace, f_type='xpath')
+
+
+def test_get_xpath_with_missing_path_star_path():
+    xpath = '/exam:interfaces/*/name'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <interfaces xmlns="http://example.com/ns/interfaces">
+    <interface>
+      <name>eth0</name>
+    </interface>
+    <interface>
+      <name>eth1</name>
+    </interface>
+    <interface>
+      <name>eth2</name>
+    </interface>
+    <interface>
+      <name>eth3</name>
+    </interface>
+  </interfaces>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, f_type='xpath')
+
+
+def test_get_xpath_with_path_star_path():
+    xpath = '/exam:interfaces/interface/*/name'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <interfaces xmlns="http://example.com/ns/interfaces">
+    <interface>
+      <name>eth0</name>
+    </interface>
+    <interface>
+      <name>eth1</name>
+    </interface>
+    <interface>
+      <name>eth2</name>
+    </interface>
+    <interface>
+      <name>eth3</name>
+    </interface>
+  </interfaces>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, f_type='xpath')
+
+
+def test_get_xpath_with_path_star():
+    xpath = '/exam:interfaces/interface/*'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <interfaces xmlns="http://example.com/ns/interfaces">
+    <interface>
+      <name>eth0</name>
+      <mtu>8192</mtu>
+      <status>up</status>
+    </interface>
+    <interface>
+      <name>eth1</name>
+      <status>up</status>
+    </interface>
+    <interface>
+      <name>eth2</name>
+      <mtu>9000</mtu>
+      <status>not feeling so good</status>
+    </interface>
+    <interface>
+      <name>eth3</name>
+      <mtu>1500</mtu>
+      <status>waking up</status>
+    </interface>
+  </interfaces>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, f_type='xpath')
+
+
+def test_get_xpath_with_name_value():
+    xpath = '/test:test//*[name="dog"]'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test xmlns="http://test.com/ns/yang/testing">
+    <animals>
+      <animal>
+        <name>dog</name>
+        <colour>brown</colour>
+      </animal>
+    </animals>
+  </test>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, f_type='xpath')
+
+
+def test_get_xpath_with_name_first():
+    xpath = '/test:test//animal[1]'
     expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
   <test xmlns="http://test.com/ns/yang/testing">
@@ -242,12 +397,24 @@ def test_get_multi_xpath_select_multi():
       </animal>
     </animals>
   </test>
-  <interfaces xmlns="http://example.com/ns/interfaces">
-    <interface>
-      <name>eth2</name>
-      <mtu>9000</mtu>
-    </interface>
-  </interfaces>
+</nc:data>
+    """
+    _get_test_with_filter(xpath, expected, f_type='xpath')
+
+
+def test_get_xpath_with_name_last():
+    xpath = '/test:test//animal[last()]'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test xmlns="http://test.com/ns/yang/testing">
+    <animals>
+      <animal>
+        <name>parrot</name>
+        <type>big</type>
+        <colour>blue</colour>
+      </animal>
+    </animals>
+  </test>
 </nc:data>
     """
     _get_test_with_filter(xpath, expected, f_type='xpath')

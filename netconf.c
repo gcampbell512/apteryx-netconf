@@ -23,8 +23,19 @@
 #include <pwd.h>
 #define APTERYX_XML_LIBXML2
 #include <apteryx-xml.h>
+#include <libxml/xpath.h>
+#include <libxml/xpathInternals.h>
+#include <libxml/debugXML.h>
 
 static sch_instance *g_schema = NULL;
+
+typedef enum
+{
+    XPATH_NONE,
+    XPATH_SIMPLE,
+    XPATH_EVALUATE,
+    XPATH_ERROR,
+} xpath_type;
 
 struct netconf_session
 {
@@ -32,6 +43,28 @@ struct netconf_session
     uint32_t id;
     char *username;
 };
+
+typedef struct _get_request
+{
+    struct netconf_session *session;
+    xmlNode *action_node;
+    GNode *query;
+    GList *xml_list;
+    char *schema_path;
+    char *href;
+    char *prefix;
+    sch_node *rschema;
+    sch_node *qschema;
+    GNode *rnode;
+    int rdepth;
+    GNode *qnode;
+    int schflags;
+    char *path;
+    xpath_type x_type;
+    bool is_filter;
+    char *error;
+    int status;
+} get_request;
 
 static struct _running_ds_lock_t
 {
@@ -50,11 +83,15 @@ static GSList *open_sessions_list = NULL;
 #define ERR_MSG_NOT_SUPPORTED 0
 #define ERR_MSG_MISSING_ATTRIB 1
 #define ERR_MSG_MALFORMED 2
+#define ERR_MSG_ALLOCATION 3
+#define ERR_MSG_PREDICATE 4
 
 static char *error_msgs[] = {
     "operation-not-supported",
     "missing-attribute",
     "malformed-message",
+    "memory-allocation-error",
+    "invalid predicate",
 };
 
 /* Close open sessions */
@@ -525,54 +562,308 @@ get_response_node (GNode *tree, int rdepth)
 }
 
 static void
-get_query_to_xml (struct netconf_session *session, GNode *query, sch_node *rschema, GNode *rnode,
-                  int rdepth, GNode *qnode, int schflags, GList **xml_list)
+cleanup_xpath_tree (GHashTable *node_table, xmlNode *node, int depth, bool *root_deleted)
+{
+    xmlNode *cur_node = NULL;
+    xmlNode *next_node = NULL;
+
+    for (cur_node = node; cur_node; cur_node = next_node) {
+        next_node = cur_node->next;
+        if (cur_node->type == XML_ELEMENT_NODE) {
+            if (!g_hash_table_lookup (node_table, cur_node))
+            {
+                xmlUnlinkNode (cur_node);
+                xmlFreeNode (cur_node);
+                if (depth == 0 && cur_node == node)
+                {
+                    *root_deleted = true;
+                    return;
+                }
+                continue;
+            }
+        }
+
+        depth++;
+        cleanup_xpath_tree (node_table, cur_node->children, depth, root_deleted);
+    }
+}
+
+void
+xpath_tree_add (GHashTable *node_table, xmlNode *node)
+{
+    xmlNode *cur_node = NULL;
+    xmlNode *next_node = NULL;
+
+    for (cur_node = node; cur_node; cur_node = next_node) {
+        next_node = cur_node->next;
+        if (cur_node->type == XML_ELEMENT_NODE)
+        {
+            if (!g_hash_table_lookup (node_table, cur_node))
+                g_hash_table_insert (node_table, cur_node, cur_node);
+        }
+
+        xpath_tree_add (node_table, cur_node->children);
+    }
+}
+
+static char *
+prepare_xpath_eval_path (get_request *request)
+{
+    char *path = request->path;
+    char *xpath;
+    char *new_path = NULL;
+    GString *gstr;
+
+    if (path[0] == '/')
+    {
+        if (strlen (path) > 1 && path[1] != '/')
+        {
+            char *colon;
+            colon = strchr (path + 1, ':');
+            if (!colon && request->prefix)
+            {
+                new_path = g_strdup_printf ("/%s:%s", request->prefix, path + 1);
+                path = new_path;
+            }
+        }
+    }
+
+    /* Support the Cisco fieldname1 slash star slash fieldname2 style query */
+    if (strstr (path, "/*/"))
+    {
+        /* Translate slash star slash fieldname to slash slash fieldname */
+        gstr = g_string_new (NULL);
+        g_string_printf (gstr, "%s", path);
+        g_string_replace (gstr, "/*/", "//", 0);
+        xpath = gstr->str;
+        g_string_free (gstr, false);
+    }
+    else
+    {
+        xpath = g_strdup (path);
+    }
+    g_free (new_path);
+    return xpath;
+}
+
+void
+xpath_set_namespace (get_request *request, xmlDoc *doc, xmlNode *xml, xmlXPathContext *xpath_ctx)
+{
+    char *href = NULL;
+    char *prefix = NULL;
+    char *next;
+    char *top_node;
+    char *path = request->path;
+
+    if (!request->href || !request->prefix)
+    {
+        if (xml->ns)
+        {
+            if (xml->ns->href)
+            {
+                href = g_strdup ((char *) xml->ns->href);
+                g_free (request->href);
+                request->href = href;
+            }
+            if (xml->ns->prefix)
+            {
+                prefix = g_strdup ((char *) xml->ns->prefix);
+                g_free (request->prefix);
+                request->prefix = prefix;
+            }
+        }
+        if (!request->href || !request->prefix)
+        {
+            if (path[0] == '/')
+            {
+                next = strchr (path + 1, '/');
+                top_node = g_strndup (path + 1, next - path - 1);
+                href = NULL;
+                prefix = NULL;
+                sch_ns_lookup_by_name (g_schema, top_node, &href, &prefix);
+                if (href && prefix)
+                {
+                    g_free (request->href);
+                    request->href = href;
+                    g_free (request->prefix);
+                    request->prefix = prefix;
+                }
+                else
+                {
+                    g_free (href);
+                    g_free (prefix);
+
+                    /* If we don't have a prefix yet, try the path */
+                    if (!request->prefix)
+                    {
+                        char *path = request->path;
+                        char *colon;
+
+                        colon = strchr (path + 1, ':');
+                        if (colon)
+                            request->prefix = g_strndup (path +1, colon - path - 1);
+                    }
+                }
+                g_free (top_node);
+            }
+        }
+    }
+
+    if (request->href && request->prefix)
+    {
+        xmlXPathRegisterNs (xpath_ctx,  BAD_CAST request->prefix, BAD_CAST request->href);
+    }
+}
+
+static void
+xpath_evaluate (get_request *request, xmlNode *xml)
+{
+    xmlDoc *doc = NULL;
+    xmlXPathContext *xpath_ctx;
+    xmlNode *root_node = NULL;
+    char *xpath;
+    xmlXPathObject* xpath_obj;
+    bool root_deleted = false;
+    GHashTable *node_table = NULL;
+
+    doc = xmlNewDoc (BAD_CAST "1.0");
+    xmlDocSetRootElement (doc, xml);
+    xmlSetTreeDoc (xml, doc);
+    xmlDebugDumpNode (stdout, xml, 5);
+    xpath_ctx = xmlXPathNewContext (doc);
+    if (xpath_ctx)
+    {
+        xpath_set_namespace (request, doc, xml, xpath_ctx);
+        xpath = prepare_xpath_eval_path (request);
+        xpath_obj = xmlXPathEvalExpression (BAD_CAST xpath, xpath_ctx);
+        xmlXPathDebugDumpObject(stdout, xpath_obj, 0);
+        if (xpath_obj)
+        {
+            xmlNode *cur;
+            int size;
+            int i;
+            xmlNodeSet *nodes = xpath_obj->nodesetval;
+            if (nodes)
+            {
+                node_table = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, NULL);
+                size = nodes->nodeNr;
+                for(i = 0; i < size; ++i)
+                {
+                    if(nodes->nodeTab[i]->type == XML_ELEMENT_NODE)
+                    {
+                        cur = nodes->nodeTab[i];
+                        if (!g_hash_table_lookup (node_table, cur))
+                            g_hash_table_insert (node_table, cur, cur);
+                        xpath_tree_add (node_table, cur->children);
+                        if (cur->parent)
+                        {
+                            while (cur->parent && g_strcmp0 ((char *) cur->parent->name, "root") != 0)
+                            {
+                                cur = cur->parent;
+                                if (!g_hash_table_lookup (node_table, cur))
+                                    g_hash_table_insert (node_table, cur, cur);
+                            }
+                        }
+                    }
+                }
+                cleanup_xpath_tree(node_table, xml, 0, &root_deleted);
+                if (root_deleted)
+                    xml = NULL;
+
+                g_hash_table_destroy (node_table);
+            }
+            else
+            {
+                xmlUnlinkNode (xml);
+                xmlFreeNode (xml);
+                xml = NULL;
+            }
+            request->xml_list = g_list_append (request->xml_list, xml);
+        }
+        else
+        {
+            request->error = error_msgs[ERR_MSG_PREDICATE];
+            request->status = -1;
+        }
+        g_free (xpath);
+    }
+    else
+    {
+        request->error = error_msgs[ERR_MSG_ALLOCATION];
+        request->status = -1;
+    }
+
+    if (request->status < 0)
+    {
+        xmlUnlinkNode (xml);
+        xmlFreeNode (xml);
+        xml = NULL;
+    }
+
+    xmlXPathFreeObject(xpath_obj);
+    xmlXPathFreeContext(xpath_ctx);
+
+    /* Cleaning up a doc is tricky */
+    if (xml)
+        xmlSetTreeDoc (xmlDocGetRootElement(doc), NULL);
+
+    root_node = xmlNewNode (NULL, BAD_CAST "root");
+    xmlDocSetRootElement (doc, root_node);
+    xmlFreeDoc (doc);
+}
+
+static void
+get_query_to_xml (get_request *request)
 {
     GNode *tree;
     xmlNode *xml = NULL;
 
     /* Query database */
-    DEBUG ("NETCONF: GET %s\n", query ? APTERYX_NAME (query) : "/");
+    DEBUG ("NETCONF: GET %s\n", request->query ? APTERYX_NAME (request->query) : "/");
     if (netconf_logging_test_flag (LOG_GET | LOG_GET_CONFIG))
         NOTICE ("%s: user:%s session-id:%d path:%s\n",
-                (schflags & SCH_F_CONFIG) ? "GET-CONFIG" : "GET", session->username, session->id,
-                query ? APTERYX_NAME (query) : "/");
+                (request->schflags & SCH_F_CONFIG) ? "GET-CONFIG" : "GET",
+                request->session->username, request->session->id,
+                request->query ? APTERYX_NAME (request->query) : "/");
 
-    tree = query ? apteryx_query (query) : get_full_tree ();
-    apteryx_free_tree (query);
+    tree = request->query ? apteryx_query (request->query) : get_full_tree ();
+    apteryx_free_tree (request->query);
 
-    if (rschema && (schflags & SCH_F_ADD_DEFAULTS))
+    if (request->rschema && (request->schflags & SCH_F_ADD_DEFAULTS))
     {
         if (tree)
         {
-            rnode = get_response_node (tree, rdepth);
-            sch_traverse_tree (g_schema, rschema, rnode, schflags);
+            request->rnode = get_response_node (tree, request->rdepth);
+            sch_traverse_tree (g_schema, request->rschema, request->rnode, request->schflags);
         }
         else if (!tree)
         {
             /* Nothing in the database, but we may have defaults! */
-            tree = query;
-            query = NULL;
-            sch_traverse_tree (g_schema, rschema, qnode, schflags);
+            tree = request->query;
+            request->query = NULL;
+            sch_traverse_tree (g_schema, request->rschema, request->qnode, request->schflags);
         }
     }
 
-    if (tree && (schflags & SCH_F_TRIM_DEFAULTS))
+    if (tree && (request->schflags & SCH_F_TRIM_DEFAULTS))
     {
         /* Get rid of any unwanted nodes */
-        GNode *rnode = get_response_node (tree, rdepth);
-        sch_traverse_tree (g_schema, rschema, rnode, schflags);
+        request->rnode = get_response_node (tree, request->rdepth);
+        sch_traverse_tree (g_schema, request->rschema, request->rnode, request->schflags);
      }
 
     /* Convert result to XML */
-    xml = tree ? sch_gnode_to_xml (g_schema, NULL, tree, schflags) : NULL;
+    xml = tree ? sch_gnode_to_xml (g_schema, NULL, tree, request->schflags) : NULL;
     apteryx_free_tree (tree);
-    *xml_list = g_list_append (*xml_list, xml);
+
+    if (xml && request->x_type == XPATH_EVALUATE)
+        xpath_evaluate (request, xml);
+    else
+        request->xml_list = g_list_append (request->xml_list, xml);
 }
 
 static void
-get_query_schema (struct netconf_session *session, GNode *query, sch_node *qschema,
-                  int schflags, bool is_filter, GList **xml_list)
+get_query_schema (get_request *request)
 {
     GNode *rnode = NULL;
     sch_node *rschema = NULL;
@@ -583,9 +874,9 @@ get_query_schema (struct netconf_session *session, GNode *query, sch_node *qsche
 
     /* Get the depth of the response which is the depth of the query
         OR the up until the first path wildcard */
-    qdepth = g_node_max_height (query);
+    qdepth = g_node_max_height (request->query);
     rdepth = 1;
-    rnode = query;
+    rnode = request->query;
     while (rnode &&
             g_node_n_children (rnode) == 1 &&
             g_strcmp0 (APTERYX_NAME (g_node_first_child (rnode)), "*") != 0)
@@ -602,7 +893,7 @@ get_query_schema (struct netconf_session *session, GNode *query, sch_node *qsche
             g_strcmp0 (APTERYX_NAME (qnode), "*") == 0)
         qdepth--;
 
-    rschema = qschema;
+    rschema = request->qschema;
     diff = qdepth - rdepth;
     while (diff--)
         rschema = sch_node_parent (rschema);
@@ -615,9 +906,11 @@ get_query_schema (struct netconf_session *session, GNode *query, sch_node *qsche
     }
 
     /* Without a query we may need to add a wildcard to get everything from here down */
-    if (is_filter && qdepth == g_node_max_height (query) && !(schflags & SCH_F_DEPTH_ONE))
+    if (request->is_filter && qdepth == g_node_max_height (request->query) &&
+        !(request->schflags & SCH_F_DEPTH_ONE))
     {
-        if (qschema && sch_node_child_first (qschema) && !(schflags & SCH_F_STRIP_DATA))
+        if (request->qschema && sch_node_child_first (request->qschema) &&
+            !(request->schflags & SCH_F_STRIP_DATA))
         {
             /* Get everything from here down if we do not already have a star */
             if (!g_node_first_child (qnode) && g_strcmp0 (APTERYX_NAME (qnode), "*") != 0)
@@ -627,40 +920,143 @@ get_query_schema (struct netconf_session *session, GNode *query, sch_node *qsche
             }
         }
     }
-
-    get_query_to_xml (session, query, rschema, rnode, rdepth, qnode, schflags, xml_list);
+    request->rschema = rschema;
+    request->rnode = rnode;
+    request->rdepth = rdepth;
+    request->qnode = qnode;
+    get_query_to_xml (request);
 }
 
-static int
-get_process_action (struct netconf_session *session, xmlNode *node, int schflags,
-                    GList **xml_list, char **error)
+static char *
+find_first_non_path(char *path)
+{
+    char *ptr = path;
+    bool slash = false;
+    int len = strlen (path);
+    int i;
+    for (i = 0; i < len; i++)
+    {
+        if (*ptr == '*' || *ptr == '[')
+        {
+            if (slash)
+                ptr--;
+
+            return ptr;
+        }
+        if (*ptr == '/')
+        {
+            if (slash)
+                return ptr - 1;
+
+            slash = true;
+        }
+        else
+            slash = false;
+        ptr++;
+    }
+    return NULL;
+}
+
+static xpath_type
+prepare_xpath_query_path (get_request *request, char *path, char **sch_path)
+{
+    char *non_path = NULL;
+    int len;
+
+    *sch_path = NULL;
+    if (path[0] != '/')
+    {
+        return XPATH_ERROR;
+    }
+    len = strlen (path);
+    if (len == 1)
+    {
+        *sch_path = g_strdup (path);
+        return XPATH_SIMPLE;
+    }
+
+    /* Check for // syntax */
+    if (path[1] == '/')
+    {
+        if (request->schema_path)
+        {
+            *sch_path = g_strdup ((char *) request->schema_path);
+            return XPATH_EVALUATE;
+        }
+        /* Trying to do a // query but we have no namespace. This will not work */
+        return XPATH_ERROR;
+    }
+    non_path = find_first_non_path (path);
+    if (non_path)
+    {
+        *sch_path = g_strndup (path, non_path - path);
+        return XPATH_EVALUATE;
+    }
+    *sch_path = g_strdup (path);
+    return XPATH_SIMPLE;
+}
+
+static void
+check_namespace_set (get_request *request, xmlNode *node)
+{
+    xmlNs *ns = node->nsDef;
+    char *path;
+    while (ns)
+    {
+        path = sch_path_lookup_by_ns (g_schema, (char *) ns->href, (char *) ns->prefix);
+        if (request->schema_path)
+        {
+            g_free (request->schema_path);
+        }
+        request->schema_path = path;
+        if (path)
+        {
+            if (ns->href)
+            {
+                g_free (request->href);
+                request->href = g_strdup ((char *)ns->href);
+            }
+            if (ns->prefix)
+            {
+                g_free (request->prefix);
+                request->prefix = g_strdup((char *) ns->prefix);
+            }
+        }
+        ns = ns->next;
+    }
+}
+
+static void
+get_process_action (get_request *request)
 {
     char *attr;
     xmlNode *tnode;
-    GNode *query = NULL;
     gchar **split;
     sch_xml_to_gnode_parms parms;
-    sch_node *qschema = NULL;
-    bool is_filter = false;
     int i;
     int count;
 
+    request->is_filter = false;
+
     /* Check the requested datastore */
-    if (g_strcmp0 ((char *) node->name, "source") == 0)
+    if (g_strcmp0 ((char *) request->action_node->name, "source") == 0)
     {
-        if (!xmlFirstElementChild (node) ||
-            g_strcmp0 ((char *) xmlFirstElementChild (node)->name, "running") != 0)
+        if (!xmlFirstElementChild (request->action_node) ||
+            g_strcmp0 ((char *) xmlFirstElementChild (request->action_node)->name, "running") != 0)
         {
             VERBOSE ("Datastore \"%s\" not supported",
-                        (char *) xmlFirstElementChild (node)->name);
-            *error = error_msgs[ERR_MSG_NOT_SUPPORTED];
-            return -1;
+                        (char *) xmlFirstElementChild (request->action_node)->name);
+            request->error = error_msgs[ERR_MSG_NOT_SUPPORTED];
+            request->status = -1;
+            return;
         }
     }
     /* Parse any filters */
-    else if (g_strcmp0 ((char *) node->name, "filter") == 0)
+    else if (g_strcmp0 ((char *) request->action_node->name, "filter") == 0)
     {
-        attr = (char *) xmlGetProp (node, BAD_CAST "type");
+        attr = (char *) xmlGetProp (request->action_node, BAD_CAST "type");
+        request->query = NULL;
+        check_namespace_set (request, request->action_node);
 
         /* Default type is "subtree" */
         if (attr == NULL)
@@ -670,96 +1066,133 @@ get_process_action (struct netconf_session *session, xmlNode *node, int schflags
         if (g_strcmp0 (attr, "xpath") == 0)
         {
             free (attr);
-            attr = (char *) xmlGetProp (node, BAD_CAST "select");
+            attr = (char *) xmlGetProp (request->action_node, BAD_CAST "select");
             if (!attr)
             {
                 VERBOSE ("XPATH filter missing select attribute");
-                *error = error_msgs[ERR_MSG_MISSING_ATTRIB];
-                return -1;
+                request->error = error_msgs[ERR_MSG_MISSING_ATTRIB];
+                request->status = -1;
+                return;
             }
             VERBOSE ("FILTER: XPATH: %s\n", attr);
-            is_filter = true;
+            request->is_filter = true;
             split = g_strsplit (attr, "|", -1);
             count = g_strv_length (split);
             for (i = 0; i < count; i++)
             {
                 char *path = g_strstrip (split[i]);
-                qschema = NULL;
-                query = sch_path_to_gnode (g_schema, NULL, path, schflags | SCH_F_XPATH, &qschema);
-                if (!query)
+                char *sch_path = NULL;
+                request->qschema = NULL;
+                if (request->prefix)
+                {
+                    g_free (request->prefix);
+                    request->prefix = NULL;
+                }
+                if (request->href)
+                {
+                    g_free (request->href);
+                    request->href = NULL;
+                }
+                request->x_type = prepare_xpath_query_path (request, path, &sch_path);
+                request->query = sch_path_to_gnode (g_schema, NULL, sch_path, request->schflags | SCH_F_XPATH,
+                                                    &request->qschema);
+                g_free (sch_path);
+                if (request->x_type == XPATH_ERROR || (!request->query && request->x_type == XPATH_SIMPLE))
                 {
                     VERBOSE ("XPATH: malformed filter\n");
                     free (attr);
                     g_strfreev(split);
-                    *error = error_msgs[ERR_MSG_MALFORMED];
-                    return -1;
+                    request->error = error_msgs[ERR_MSG_MALFORMED];
+                    request->status = -1;
+                    return;
                 }
 
-                if (qschema)
+                request->path = path;
+                if (request->qschema)
                 {
-                    if (sch_is_leaf (qschema) && !sch_is_readable (qschema))
+                    if (sch_is_leaf (request->qschema) && !sch_is_readable (request->qschema))
                     {
                         VERBOSE ("NETCONF: Path \"%s\" not readable\n", attr);
                         free (attr);
                         g_strfreev(split);
-                        *error = error_msgs[ERR_MSG_NOT_SUPPORTED];
-                        return -1;
+                        request->error = error_msgs[ERR_MSG_NOT_SUPPORTED];
+                        request->status = -1;
+                        return;
                     }
-                    get_query_schema (session, query, qschema, schflags, is_filter, xml_list);
+                    get_query_schema (request);
+                }
+                else if (!request->query && request->x_type == XPATH_EVALUATE)
+                {
+                    get_query_to_xml (request);
+                }
+                else
+                {
+                    request->error = error_msgs[ERR_MSG_MALFORMED];
+                    request->status = -1;
+                    return;
                 }
             }
             g_strfreev(split);
         }
         else if (g_strcmp0 (attr, "subtree") == 0)
         {
-            if (!xmlFirstElementChild (node))
+            if (!xmlFirstElementChild (request->action_node))
             {
                 VERBOSE ("SUBTREE: empty query\n");
                 free (attr);
-                *xml_list = g_list_append (*xml_list, NULL);
-                return 0;
+                request->xml_list = g_list_append (request->xml_list, NULL);
+                return;
             }
 
-            for (tnode = xmlFirstElementChild (node); tnode; tnode = xmlNextElementSibling (tnode))
+            for (tnode = xmlFirstElementChild (request->action_node); tnode; tnode = xmlNextElementSibling (tnode))
             {
-                qschema = NULL;
+                request->qschema = NULL;
                 parms =
                     sch_xml_to_gnode (g_schema, NULL, tnode,
-                                        schflags | SCH_F_STRIP_DATA | SCH_F_STRIP_KEY, "none",
-                                        false, &qschema);
-                query = sch_parm_tree (parms);
+                                      request->schflags | SCH_F_STRIP_DATA | SCH_F_STRIP_KEY, "none",
+                                      false, &request->qschema);
+                request->query = sch_parm_tree (parms);
                 sch_parm_free (parms);
-                if (!query)
+                if (!request->query)
                 {
                     VERBOSE ("SUBTREE: malformed query\n");
                     free (attr);
-                    *error = error_msgs[ERR_MSG_MALFORMED];
-                    return -1;
+                    request->error = error_msgs[ERR_MSG_MALFORMED];
+                    request->status = -1;
+                    return;
                 }
 
-                if (qschema)
+                if (request->qschema)
                 {
-                    if (sch_is_leaf (qschema) && !sch_is_readable (qschema))
+                    if (sch_is_leaf (request->qschema) && !sch_is_readable (request->qschema))
                     {
                         VERBOSE ("NETCONF: Path \"%s\" not readable\n", attr);
-                        *error = error_msgs[ERR_MSG_NOT_SUPPORTED];
-                        return -1;
+                        request->error = error_msgs[ERR_MSG_NOT_SUPPORTED];
+                        request->status = -1;
+                        return;
                     }
-                    get_query_schema (session, query, qschema, schflags, is_filter, xml_list);
+                    get_query_schema (request);
                 }
             }
         }
         else
         {
             VERBOSE ("FILTER: unsupported/missing type (%s)\n", attr);
-            free (attr);
-            *error = error_msgs[ERR_MSG_NOT_SUPPORTED];
-            return -1;
+            request->error = error_msgs[ERR_MSG_NOT_SUPPORTED];
+            request->status = -1;
         }
         free (attr);
     }
+}
 
-    return 0;
+static void
+free_get_request (get_request *request)
+{
+    g_free (request->schema_path);
+    g_free (request->prefix);
+    g_free (request->href);
+
+    g_free (request);
 }
 
 static bool
@@ -767,9 +1200,8 @@ handle_get (struct netconf_session *session, xmlNode * rpc, gboolean config_only
 {
     xmlNode *action = xmlFirstElementChild (rpc);
     xmlNode *node;
-    char *error = NULL;
-    GList *xml_list = NULL;
     GList *list;
+    get_request *request = NULL;
     int schflags = 0;
     char *msg = NULL;
     char session_id_str[32];
@@ -822,31 +1254,44 @@ handle_get (struct netconf_session *session, xmlNode * rpc, gboolean config_only
     }
 
     /* Parse the remaining options */
+    request = g_malloc0 (sizeof (get_request));
+    request->session = session;
+    request->schflags = schflags;
+    check_namespace_set (request, rpc);
     for (node = xmlFirstElementChild (action); node; node = xmlNextElementSibling (node))
     {
         if (g_strcmp0 ((char *) node->name, "with-defaults") == 0)
             continue;
 
-        if (get_process_action (session, node, schflags, &xml_list, &error) < 0)
+        request->action_node = node;
+        get_process_action (request);
+        if (request->status < 0)
         {
             /* Cleanup any requests added to the xml_list before hitting an error */
-            for (list = g_list_first (xml_list); list; list = g_list_next (list))
+            for (list = g_list_first (request->xml_list); list; list = g_list_next (list))
             {
                 xmlFree (list->data);
             }
-            g_list_free (xml_list);
-
-            return send_rpc_error (session, rpc, error, NULL, NULL);
+            g_list_free (request->xml_list);
+            int ret = send_rpc_error (session, rpc, request->error, NULL, NULL);
+            free_get_request (request);
+            return ret;
         }
     }
 
     /* Catch for get without filter */
-    if (!xml_list)
-        get_query_to_xml (session, NULL, NULL, NULL, 0, NULL, schflags, &xml_list);
+    if (!request->xml_list)
+    {
+        request->x_type = XPATH_NONE;
+        request->rschema = NULL;
+        request->query = NULL;
+        get_query_to_xml (request);
+    }
 
     /* Send response */
-    send_rpc_data (session, rpc, xml_list);
+    send_rpc_data (session, rpc, request->xml_list);
 
+    free_get_request (request);
     return true;
 }
 

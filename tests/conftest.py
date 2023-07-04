@@ -1,6 +1,7 @@
 import os
 import pytest
 from ncclient import manager
+# from ncclient.xml_ import new_ele, sub_ele
 from lxml import etree
 import subprocess
 
@@ -133,14 +134,19 @@ def diffXML(a, b):
     return None
 
 
-def _get_test_with_filter(f_value, expected=None, f_type='subtree'):
+def _get_test_with_filter(f_value, expected=None, f_ns=None, f_type='subtree'):
     """
     Perform a get with the given filter, which can be of type 'subtree' or 'xpath'. If expectede
     respose is given, assert that it was the same as the response from the get. Return the response
     so the caller can perform its own tests.
     """
     m = connect()
-    xml = m.get(filter=(f_type, f_value)).data
+    if f_ns is not None:
+        filter_str = '<nc:filter type="xpath" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" %s select="%s" />' % (f_ns, f_value)
+        print("Filter_str = ", filter_str)
+        xml = m.get(filter=filter_str).data
+    else:
+        xml = m.get(filter=(f_type, f_value)).data
     print(etree.tostring(xml, pretty_print=True, encoding="unicode"))
     if expected:
         expected = toXML(expected)
