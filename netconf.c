@@ -263,7 +263,7 @@ send_rpc_data (struct netconf_session *session, xmlNode * rpc, GList *xml_list)
 {
     xmlDoc *doc;
     xmlNode * data;
-    xmlNode *child;
+    xmlNode *root;
     xmlChar *xmlbuff;
     GList *list;
     char *header = NULL;
@@ -272,17 +272,17 @@ send_rpc_data (struct netconf_session *session, xmlNode * rpc, GList *xml_list)
 
     /* Generate reply */
     doc = create_rpc ( BAD_CAST "rpc-reply", xmlGetProp (rpc, BAD_CAST "message-id"));
-    child = xmlNewChild (xmlDocGetRootElement (doc), NULL, BAD_CAST "data", NULL);
+    root = xmlNewChild (xmlDocGetRootElement (doc), NULL, BAD_CAST "data", NULL);
     if (!xml_list)
     {
-        xmlAddChildList (child, NULL);
+        xmlAddChildList (root, NULL);
     }
     else
     {
         for (list = g_list_first (xml_list); list; list = g_list_next (list))
         {
             data = list->data;
-            xmlAddChildList (child, data);
+            xmlAddChildList (root, data);
         }
     }
 
@@ -791,6 +791,8 @@ get_process_action (struct netconf_session *session, xmlNode *node, int schflags
         }
         else if (g_strcmp0 (attr, "subtree") == 0)
         {
+            bool key_in_query;
+
             if (!xmlFirstElementChild (node))
             {
                 VERBOSE ("SUBTREE: empty query\n");
@@ -802,10 +804,11 @@ get_process_action (struct netconf_session *session, xmlNode *node, int schflags
             for (tnode = xmlFirstElementChild (node); tnode; tnode = xmlNextElementSibling (tnode))
             {
                 qschema = NULL;
+                key_in_query = false;
                 parms =
                     sch_xml_to_gnode (g_schema, NULL, tnode,
-                                        schflags | SCH_F_STRIP_DATA | SCH_F_STRIP_KEY, "none",
-                                        false, &qschema);
+                                        schflags | SCH_F_STRIP_KEY, "none",
+                                        false, &qschema, &key_in_query);
                 query = sch_parm_tree (parms);
                 sch_parm_free (parms);
                 if (!query)
@@ -822,9 +825,12 @@ get_process_action (struct netconf_session *session, xmlNode *node, int schflags
                     {
                         VERBOSE ("NETCONF: Path \"%s\" not readable\n", attr);
                         *error = error_msgs[ERR_MSG_NOT_SUPPORTED];
+                        apteryx_free_tree (query);
+                        free (attr);
                         return -1;
                     }
-                    get_query_schema (session, query, qschema, schflags, is_filter, xml_list);
+                    get_query_schema (session, query, qschema, key_in_query ? schflags | SCH_F_XPATH : schflags,
+                                      is_filter, xml_list);
                 }
             }
         }
@@ -1022,7 +1028,7 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
     /* Convert to gnode */
     parms =
         sch_xml_to_gnode (g_schema, NULL, xmlFirstElementChild (node), schflags, "merge",
-                          true, &qschema);
+                          true, &qschema, NULL);
     tree = sch_parm_tree (parms);
     error_tag = sch_parm_error_tag (parms);
 

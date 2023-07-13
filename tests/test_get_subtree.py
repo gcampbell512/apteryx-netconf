@@ -531,21 +531,11 @@ def test_get_subtree_select_no_key_other_field_value():
 
 
 def test_get_subtree_select_key_other_field_value():
-    """
-    This test may not be showing correct behaviour.
-    """
     select = '<test><animals><animal><name/><type>little</type></animal></animals></test>'
     expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
     <test xmlns="http://test.com/ns/yang/testing">
         <animals>
-            <animal>
-                <name>cat</name>
-                <type>big</type>
-            </animal>
-            <animal>
-                <name>dog</name>
-            </animal>
             <animal>
                 <name>hamster</name>
                 <type>little</type>
@@ -554,11 +544,7 @@ def test_get_subtree_select_key_other_field_value():
                 <name>mouse</name>
                 <type>little</type>
             </animal>
-            <animal>
-                <name>parrot</name>
-                <type>big</type>
-            </animal>
-        </animals>
+         </animals>
     </test>
 </nc:data>
     """
@@ -566,9 +552,6 @@ def test_get_subtree_select_key_other_field_value():
 
 
 def test_get_subtree_select_key_value_other_field_value():
-    """
-    This test may not be showing correct behaviour.
-    """
     select = """
 <test>
     <animals>
@@ -629,3 +612,91 @@ def test_get_multi_subtree_select_multi():
     assert xml.find('./{*}test/{*}animals/{*}animal[{*}name="cat"]/{*}type').text == 'big'
     assert xml.find('./{*}interfaces/{*}interface[{*}name="eth2"]/{*}mtu').text == '9000'
     m.close_session()
+
+
+def test_get_subtree_select_key_value_other_field_exp_simple():
+    select = """
+<test>
+    <animals>
+        <animal>
+            <name/>
+                <colour>brown</colour>
+        </animal>
+    </animals>
+</test>
+    """
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <test xmlns="http://test.com/ns/yang/testing">
+        <animals>
+            <animal>
+                <name>dog</name>
+                <colour>brown</colour>
+            </animal>
+        </animals>
+    </test>
+</nc:data>
+    """
+    _get_test_with_filter(select, expected)
+
+
+def test_get_subtree_select_key_value_other_field_exp_deep():
+    select = """
+<test>
+    <animals>
+        <animal>
+            <name>hamster</name>
+                <food>
+                    <name/>
+                        <type>kibble</type>
+                </food>
+        </animal>
+    </animals>
+</test>
+    """
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <test xmlns="http://test.com/ns/yang/testing">
+        <animals>
+            <animal>
+                <name>hamster</name>
+                <food>
+                    <name>nuts</name>
+                    <type>kibble</type>
+                </food>
+            </animal>
+        </animals>
+    </test>
+</nc:data>
+    """
+    _get_test_with_filter(select, expected)
+
+
+def test_get_subtree_select_key_value_other_field_exp_two_results():
+    select = """
+<test>
+    <animals>
+        <animal>
+            <name/>
+                <type>1</type>
+        </animal>
+    </animals>
+</test>
+    """
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <test xmlns="http://test.com/ns/yang/testing">
+        <animals>
+            <animal>
+                <name>cat</name>
+                <type>big</type>
+            </animal>
+            <animal>
+                <name>parrot</name>
+                <type>big</type>
+            </animal>
+        </animals>
+    </test>
+</nc:data>
+    """
+    _get_test_with_filter(select, expected)
