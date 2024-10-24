@@ -138,6 +138,74 @@ def test_edit_config_list():
     _edit_config_test(payload, post_xpath="/test/animals", inc_str=["frog"])
 
 
+def test_edit_config_list_just_index():
+    payload = """
+<config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0"
+        xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test>
+    <animals>
+        <animal>
+            <name>polar bear</name>
+        </animal>
+    </animals>
+  </test>
+</config>
+"""
+    _edit_config_test(payload, post_xpath="/test/animals", inc_str=["polar bear"])
+
+
+def test_edit_config_list_just_index_twice():
+    payload = """
+<config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0"
+        xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test>
+    <animals>
+        <animal>
+            <name>polar bear</name>
+        </animal>
+    </animals>
+  </test>
+</config>
+"""
+    _edit_config_test(payload, post_xpath="/test/animals", inc_str=["polar bear"])
+    _edit_config_test(payload, post_xpath="/test/animals", inc_str=["polar bear"])
+
+
+def test_edit_config_list_double_index():
+    """
+    Create a list entry with a merge, then send a merge request on that entry with
+    another index variable in the message. The original list entry should remain
+    unchanges.
+    """
+    pl1 = """
+<config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0"
+        xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test>
+    <animals>
+        <animal>
+            <name>polar bear</name>
+        </animal>
+    </animals>
+  </test>
+</config>
+"""
+    pl2 = """
+<config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0"
+        xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test>
+    <animals>
+        <animal>
+            <name>polar bear</name>
+            <name>big white bear</name>
+        </animal>
+    </animals>
+  </test>
+</config>
+"""
+    _edit_config_test(pl1, post_xpath="/test/animals", inc_str=["polar bear"])
+    _edit_config_test(pl2, post_xpath="/test/animals", inc_str=["polar bear"])
+
+
 def test_edit_config_toplevel_list():
     payload = """
 <config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0"

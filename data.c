@@ -911,21 +911,11 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
                 {
                     node = APTERYX_NODE (tree, value);
                     DEBUG ("%*s%s = %s\n", depth * 2, " ", name, APTERYX_NAME (node));
-
                     if (_parms->in_is_edit)
                     {
-                        bool is_key = false;
-
-                        if (sch_parent && sch_is_list (sch_parent) &&
-                            (schema == sch_node_child_first (sch_node_child_first (sch_parent))))
-                            is_key = true;
-
-                        if (!is_key)
-                        {
-                            _parms->out_merges =
-                                g_list_append (_parms->out_merges, g_strdup_printf ("%s/%s", new_xpath, value));
-                            DEBUG ("merge <%s>\n", new_xpath);
-                        }
+                        _parms->out_merges =
+                            g_list_append (_parms->out_merges, g_strdup_printf ("%s/%s", new_xpath, value));
+                        DEBUG ("merge <%s>\n", new_xpath);
                     }
                 }
             }
