@@ -1945,18 +1945,42 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
     for (iter = sch_parm_deletes (parms); iter; iter = g_list_next (iter))
     {
         _check_exist ((char *) iter->data, &err_tag, true);
+        if (err_tag != NC_ERR_TAG_UNKNOWN)
+        {
+            if (logging & LOG_EDIT_CONFIG)
+            {
+                gchar *err_msg = NULL;
+                err_msg = g_strdup_printf ("EDIT_CONFIG: error while deleting path %s - %s\n",
+                                            (char *) iter->data,
+                                            rpc_error_tag_to_string (err_tag));
+                ERROR ("%s\n", err_msg);
+                g_free (err_msg);
+            }
+            ret = send_rpc_error_full (session, rpc, err_tag, NC_ERR_TYPE_APP, NULL, NULL, NULL, true);
+            sch_parm_free (parms);
+            apteryx_free_tree (tree);
+            return ret;
+        }
     }
     for (iter = sch_parm_creates (parms); iter; iter = g_list_next (iter))
     {
         _check_exist ((char *) iter->data, &err_tag, false);
-    }
-    if (err_tag != NC_ERR_TAG_UNKNOWN)
-    {
-        VERBOSE ("error in delete or create paths\n");
-        ret = send_rpc_error_full (session, rpc, err_tag, NC_ERR_TYPE_APP, NULL, NULL, NULL, true);
-        sch_parm_free (parms);
-        apteryx_free_tree (tree);
-        return ret;
+        if (err_tag != NC_ERR_TAG_UNKNOWN)
+        {
+            if (logging & LOG_EDIT_CONFIG)
+            {
+                gchar *err_msg = NULL;
+                err_msg = g_strdup_printf ("EDIT_CONFIG: error while creating path %s - %s\n",
+                                           (char *) iter->data,
+                                           rpc_error_tag_to_string (err_tag));
+                ERROR ("%s\n", err_msg);
+                g_free (err_msg);
+            }
+            ret = send_rpc_error_full (session, rpc, err_tag, NC_ERR_TYPE_APP, NULL, NULL, NULL, true);
+            sch_parm_free (parms);
+            apteryx_free_tree (tree);
+            return ret;
+        }
     }
 
     /* Delete delete, remove and replace paths */
