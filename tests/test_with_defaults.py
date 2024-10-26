@@ -222,20 +222,60 @@ def test_with_defaults_report_all_subtree():
     _get_test_with_defaults_and_filter(select, with_defaults, expected)
 
 
-# Test case where a query fails returns no result and the query itself is used to fill in defaults
-# Note - because the query is used as the basis of the result tree, the normal <name>eth4</name>
-# nodes are not present in the output.
+def test_with_defaults_report_all_subtree_list():
+    with_defaults = 'report-all'
+    select = '<interfaces><interface></interface></interfaces>'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <interfaces xmlns="http://example.com/ns/interfaces">
+        <interface>
+            <name>eth0</name>
+            <mtu>8192</mtu>
+            <status>up</status>
+        </interface>
+        <interface>
+            <name>eth1</name>
+            <mtu>1500</mtu>
+            <status>up</status>
+        </interface>
+        <interface>
+            <name>eth2</name>
+            <mtu>9000</mtu>
+            <status>not feeling so good</status>
+        </interface>
+        <interface>
+            <name>eth3</name>
+            <mtu>1500</mtu>
+            <status>waking up</status>
+        </interface>
+    </interfaces>
+</nc:data>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+# Test case where a query fails and returns no result. This is a specific request for a list item.
+# As the list item does not exist no data is returned.
 def test_with_defaults_report_all_subtree_no_match():
     with_defaults = 'report-all'
     select = '<interfaces><interface><name>eth4</name></interface></interfaces>'
     expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0"/>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+def test_with_defaults_report_all_leaf():
+    apteryx.set("/test/settings/debug", "")
+    with_defaults = 'report-all'
+    select = '<test><settings><debug/></settings></test>'
+    expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
-  <interfaces xmlns="http://example.com/ns/interfaces">
-    <interface>
-      <mtu>1500</mtu>
-      <status>up</status>
-    </interface>
-  </interfaces>
+  <test xmlns="http://test.com/ns/yang/testing">
+    <settings>
+      <debug>disable</debug>
+    </settings>
+  </test>
 </nc:data>
     """
     _get_test_with_defaults_and_filter(select, with_defaults, expected)
@@ -288,13 +328,13 @@ def test_with_defaults_get_subtree_select_one_node_other():
     select = '<test><animals><animal><name>cat</name><food/></animal></animals></test>'
     expected = """
 <nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
-    <test xmlns="http://test.com/ns/yang/testing">
-        <animals>
-            <animal>
-                <name>cat</name>
-            </animal>
-        </animals>
-    </test>
+  <test xmlns="http://test.com/ns/yang/testing">
+    <animals>
+      <animal>
+        <name>cat</name>
+      </animal>
+    </animals>
+  </test>
 </nc:data>
     """
     _get_test_with_defaults_and_filter(select, with_defaults, expected)
@@ -311,6 +351,98 @@ def test_with_default_report_all_get_leaf():
             <status>up</status>
         </interface>
     </interfaces>
+</nc:data>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+def test_with_default_report_all_get_missing_leaf():
+    with_defaults = 'report-all'
+    select = '<interfaces><interface><name>eth1</name></interface></interfaces>'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <interfaces xmlns="http://example.com/ns/interfaces">
+        <interface>
+            <name>eth1</name>
+            <mtu>1500</mtu>
+            <status>up</status>
+        </interface>
+    </interfaces>
+</nc:data>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+def test_with_default_report_all_get_specific_leaf():
+    with_defaults = 'report-all'
+    select = '<interfaces><interface><name>eth1</name><status/></interface></interfaces>'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <interfaces xmlns="http://example.com/ns/interfaces">
+        <interface>
+            <name>eth1</name>
+            <status>up</status>
+        </interface>
+    </interfaces>
+</nc:data>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+def test_with_default_report_all_no_name_get_specific_leaf():
+    with_defaults = 'report-all'
+    select = '<interfaces><interface><name></name><mtu/></interface></interfaces>'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <interfaces xmlns="http://example.com/ns/interfaces">
+    <interface>
+      <name>eth0</name>
+      <mtu>8192</mtu>
+    </interface>
+    <interface>
+      <name>eth1</name>
+      <mtu>1500</mtu>
+    </interface>
+    <interface>
+      <name>eth2</name>
+      <mtu>9000</mtu>
+    </interface>
+    <interface>
+      <name>eth3</name>
+      <mtu>1500</mtu>
+    </interface>
+  </interfaces>
+</nc:data>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+def test_with_default_report_all_no_defaults_set_leaf():
+    apteryx.set("/interfaces/interface/eth0/mtu", "")
+    apteryx.set("/interfaces/interface/eth2/mtu", "")
+    apteryx.set("/interfaces/interface/eth3/mtu", "")
+    with_defaults = 'report-all'
+    select = '<interfaces><interface><mtu/></interface></interfaces>'
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <interfaces xmlns="http://example.com/ns/interfaces">
+    <interface>
+      <name>eth0</name>
+      <mtu>1500</mtu>
+    </interface>
+    <interface>
+      <name>eth1</name>
+      <mtu>1500</mtu>
+    </interface>
+    <interface>
+      <name>eth2</name>
+      <mtu>1500</mtu>
+    </interface>
+    <interface>
+      <name>eth3</name>
+      <mtu>1500</mtu>
+    </interface>
+  </interfaces>
 </nc:data>
     """
     _get_test_with_defaults_and_filter(select, with_defaults, expected)
@@ -437,6 +569,47 @@ def test_with_default_report_all_on_empty_branch():
         </toys>
       </animal>
     </animals>
+  </test>
+</nc:data>
+    """
+    _get_test_with_defaults_and_filter(select, with_defaults, expected)
+
+
+def test_with_default_report_all_trunk_data():
+    apteryx.set("/test/settings/users/alfred/name", "alfred")
+    apteryx.set("/test/settings/users/alfred/age", "87")
+    apteryx.set("/test/settings/debug", "")
+    with_defaults = 'report-all'
+    select = '''
+            <test>
+                <settings/>
+            </test>
+            '''
+    expected = """
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test xmlns="http://test.com/ns/yang/testing">
+    <settings>
+      <debug>disable</debug>
+      <enable>true</enable>
+      <priority>1</priority>
+      <readonly>yes</readonly>
+      <time>
+        <active>false</active>
+      </time>
+      <users>
+        <name>alfred</name>
+        <age>87</age>
+        <active>false</active>
+      </users>
+      <users>
+        <name>bob</name>
+        <age>34</age>
+        <active>true</active>
+        <groups>2</groups>
+        <groups>23</groups>
+      </users>
+      <volume>1</volume>
+    </settings>
   </test>
 </nc:data>
     """

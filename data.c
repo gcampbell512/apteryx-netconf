@@ -948,6 +948,9 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
                     /* Want one field in list element for one or more entries */
                     APTERYX_NODE (node, g_strdup ((const char *) child->name));
                     DEBUG ("%*s%s\n", (depth + 1) * 2, " ", child->name);
+                    sch_node *child_schema = sch_ns_node_child (ns, schema, (char *) child->name);
+                    if (child_schema && rschema)
+                        *rschema = child_schema;
                 }
                 break;
             }
@@ -956,6 +959,9 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
             {
                 GNode *_node = APTERYX_NODE (node, g_strdup ((const char *) child->name));
                 DEBUG ("%*s%s\n", depth * 2, " ", APTERYX_NAME (node));
+                sch_node *child_schema = sch_ns_node_child (ns, schema, (char *) child->name);
+                if (child_schema && rschema)
+                    *rschema = child_schema;
                 if (!_parms->in_is_edit)
                     g_node_prepend_data (_node, NULL);
             }
