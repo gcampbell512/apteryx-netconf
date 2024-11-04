@@ -180,7 +180,7 @@ sch_instance *netconf_get_g_schema (void);
 xmlNode *sch_gnode_to_xml (sch_instance * instance, sch_node * schema, GNode * node, int flags);
 sch_xml_to_gnode_parms sch_xml_to_gnode (sch_instance * instance, sch_node * schema,
                                          xmlNode * xml, int flags, char * def_op,
-                                         bool is_edit, sch_node **rschema, char ** edit_op);
+                                         bool is_edit, sch_node **rschema);
 GNode *sch_parm_tree (sch_xml_to_gnode_parms parms);
 nc_error_parms sch_parm_error (sch_xml_to_gnode_parms parms);
 GList *sch_parm_deletes (sch_xml_to_gnode_parms parms);

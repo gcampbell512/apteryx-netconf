@@ -605,7 +605,7 @@ _xml_to_gnode_find_key (xmlNode * xml, char * key)
 
 static GNode *
 _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *ns, char * part_xpath,
-                   char * curr_op, GNode * pparent, xmlNode * xml, int depth, sch_node **rschema, char ** edit_op)
+                   char * curr_op, GNode * pparent, xmlNode * xml, int depth, sch_node **rschema)
 {
     sch_instance *instance = _parms->in_instance;
     int flags = _parms->in_flags;
@@ -690,9 +690,6 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
         return NULL;
     }
 
-    if (edit_op && new_op)
-        *edit_op = new_op;
-
     /* LIST */
     if (sch_is_leaf_list (schema))
     {
@@ -731,11 +728,22 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
                 new_xpath = g_strdup_printf ("%s/%s", old_xpath, key_value);
                 node = APTERYX_NODE (tree, g_strdup (key_value));
                 node = APTERYX_NODE (node, g_strdup (content));
-                if (_parms->in_is_edit && g_strcmp0 (new_op, "merge") == 0)
+                if (_parms->in_is_edit)
                 {
-                    _parms->out_merges =
-                        g_list_append (_parms->out_merges, g_strdup(new_xpath));
-                    DEBUG ("merge <%s>\n", new_xpath);
+                    if (g_strcmp0 (new_op, "merge") == 0)
+                    {
+                        _parms->out_merges =
+                            g_list_append (_parms->out_merges, g_strdup(new_xpath));
+                        DEBUG ("merge <%s>\n", new_xpath);
+
+                    }
+                    else if (g_strcmp0 (new_op, "replace") == 0)
+                    {
+                        _parms->out_replaces =
+                            g_list_append (_parms->out_replaces, g_strdup(new_xpath));
+                        DEBUG ("replace <%s>\n", new_xpath);
+
+                    }
                 }
             }
             g_free (content);
@@ -913,9 +921,20 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
                     DEBUG ("%*s%s = %s\n", depth * 2, " ", name, APTERYX_NAME (node));
                     if (_parms->in_is_edit)
                     {
-                        _parms->out_merges =
-                            g_list_append (_parms->out_merges, g_strdup_printf ("%s/%s", new_xpath, value));
-                        DEBUG ("merge <%s>\n", new_xpath);
+                        if (g_strcmp0 (new_op, "merge") == 0)
+                        {
+                            _parms->out_merges =
+                                g_list_append (_parms->out_merges, g_strdup(new_xpath));
+                            DEBUG ("merge <%s>\n", new_xpath);
+
+                        }
+                        else if (g_strcmp0 (new_op, "replace") == 0)
+                        {
+                            _parms->out_replaces =
+                                g_list_append (_parms->out_replaces, g_strdup(new_xpath));
+                            DEBUG ("replace <%s>\n", new_xpath);
+
+                        }
                     }
                 }
             }
@@ -963,7 +982,7 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
         }
         else
         {
-            GNode *cn = _sch_xml_to_gnode (_parms, schema, ns, new_xpath, new_op, NULL, child, depth + 1, rschema, edit_op);
+            GNode *cn = _sch_xml_to_gnode (_parms, schema, ns, new_xpath, new_op, NULL, child, depth + 1, rschema);
             if (_parms->out_error.tag)
             {
                 apteryx_free_tree (tree);
@@ -1033,13 +1052,13 @@ sch_parms_init (sch_instance * instance, int flags, char * def_op, bool is_edit)
 
 sch_xml_to_gnode_parms
 sch_xml_to_gnode (sch_instance * instance, sch_node * schema, xmlNode * xml, int flags,
-                  char * def_op, bool is_edit, sch_node **rschema, char ** edit_op)
+                  char * def_op, bool is_edit, sch_node **rschema)
 {
     _sch_xml_to_gnode_parms *_parms = sch_parms_init(instance, flags, def_op, is_edit);
 
     if (xml)
         _parms->out_tree = _sch_xml_to_gnode (_parms, schema, NULL, "", def_op, NULL, xml, 0,
-                                              rschema, edit_op);
+                                              rschema);
     else
     {
         _parms->out_error.tag = NC_ERR_TAG_INVALID_VAL;

@@ -268,6 +268,37 @@ _free_error_parms (nc_error_parms error_parms)
     g_hash_table_destroy (error_parms.info);
 }
 
+static char *
+get_rpc_operation_type (xmlNode *rpc)
+{
+    xmlNode *cur = NULL;
+    char *operation = NULL;
+
+    if (!rpc)
+        return NULL;
+
+    for (cur = rpc->children; cur; cur = cur->next)
+    {
+        if (cur->type == XML_ELEMENT_NODE)
+        {
+            if (xmlStrcmp (cur->name, BAD_CAST "get") == 0 ||
+                xmlStrcmp (cur->name, BAD_CAST "get-config") == 0 ||
+                xmlStrcmp (cur->name, BAD_CAST "edit-config") == 0 ||
+                xmlStrcmp (cur->name, BAD_CAST "lock") == 0 ||
+                xmlStrcmp (cur->name, BAD_CAST "unlock") == 0 ||
+                xmlStrcmp (cur->name, BAD_CAST "close-session") == 0 ||
+                xmlStrcmp (cur->name, BAD_CAST "kill-session") == 0)
+            {
+                    operation = g_strdup((char *)cur->name);
+                    break;
+
+            }
+
+        }
+    }
+    return operation;
+}
+
 static GList*
 generate_apteryx_query_node_paths (GNode *query, GString* qpath, GList *paths)
 {
@@ -1063,6 +1094,7 @@ xpath_evaluate (struct netconf_session *session, xmlNode *rpc, char *path, char 
     xmlNode *root_node = NULL;
     char *xpath;
     char *error = NULL;
+    char *op_type = NULL;
     xmlXPathObject* xpath_obj;
     bool root_deleted = false;
     GHashTable *node_table = NULL;
@@ -1075,6 +1107,15 @@ xpath_evaluate (struct netconf_session *session, xmlNode *rpc, char *path, char 
     if (xpath_ctx)
     {
         xpath = sch_xpath_set_ns_path (g_schema, NULL, xml, xpath_ctx, path);
+        op_type = get_rpc_operation_type (rpc);
+        if (op_type)
+        {
+            char *op_type_upper = g_utf8_strup (op_type, strlen (op_type));
+            NOTICE ("%s: %s@%s: id=%u path=%s\n", op_type_upper, session->username, session->rem_addr, session->id, xpath);
+            g_free (op_type_upper);
+        }
+        g_free (op_type);
+
         xpath_obj = xmlXPathEvalExpression (BAD_CAST xpath, xpath_ctx);
         if (xpath_obj)
         {
@@ -1595,7 +1636,7 @@ get_process_action (struct netconf_session *session, xmlNode *rpc, xmlNode *node
                 qschema = NULL;
                 parms =
                     sch_xml_to_gnode (g_schema, NULL, tnode, schflags | SCH_F_STRIP_KEY, "merge",
-                                      false, &qschema, NULL);
+                                      false, &qschema);
                 query = sch_parm_tree (parms);
                 sch_parm_free (parms);
                 if (!query)
@@ -1868,7 +1909,6 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
     char *exists;
     bool ret = false;
     char *def_op = NULL;
-    char *new_op = NULL;
 
     if (apteryx_netconf_verbose)
         schflags |= SCH_F_DEBUG;
@@ -1920,7 +1960,7 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
     /* Convert to gnode */
     parms =
         sch_xml_to_gnode (g_schema, NULL, xmlFirstElementChild (node), schflags, def_op,
-                          true, &qschema, &new_op);
+                          true, &qschema);
 
     tree = sch_parm_tree (parms);
 
@@ -2052,7 +2092,6 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
             NOTICE ("EDIT-CONFIG: %s@%s id:%d remove:%s\n",
                     session->username, session->rem_addr, session->id, (char *) iter->data);
         }
-        /* Note replace is covered by an equivalent merge */
         for (iter = sch_parm_creates (parms); iter; iter = g_list_next (iter))
         {
             value = split_path_value ((char *) iter->data);
@@ -2063,9 +2102,16 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
         for (iter = sch_parm_merges (parms); iter; iter = g_list_next (iter))
         {
             value = split_path_value ((char *) iter->data);
-            NOTICE ("EDIT-CONFIG: %s@%s id:%d %s:%s=%s\n",
+            NOTICE ("EDIT-CONFIG: %s@%s id:%d merge:%s=%s\n",
                     session->username, session->rem_addr, session->id,
-                    new_op ?: "merge", (char *) iter->data, value);
+                    (char *) iter->data, value);
+        }
+        for (iter = sch_parm_replaces (parms); iter; iter = g_list_next (iter))
+        {
+            value = split_path_value ((char *) iter->data);
+            NOTICE ("EDIT-CONFIG: %s@%s id:%d replace:%s=%s\n",
+                    session->username, session->rem_addr, session->id,
+                    (char *) iter->data, value);
         }
     }
 
