@@ -51,7 +51,7 @@ load_logging_options (void)
         {
             /* Remove any trailing LF */
             buf[strcspn(buf, "\n")] = '\0';
-            split = g_strsplit (buf, " ", 6);
+            split = g_strsplit (buf, " ", 0);
             count = g_strv_length (split);
             for (i = 0; i < count; i++)
             {

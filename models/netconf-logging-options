@@ -1,1 +1,1 @@
-edit-config get get-config kill-session lock unlock
+edit-config get get-config kill-session lock unlock close-session
