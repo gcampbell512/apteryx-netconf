@@ -708,7 +708,10 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
             char *content = (char *) xmlNodeGetContent (xml);
             if (_parms->in_is_edit && !sch_validate_pattern (schema, content))
             {
-                DEBUG ("Invalid value \"%s\" for node \"%s\"\n", content, name);
+                if (logging & LOG_EDIT_CONFIG)
+                {
+                    ERROR ("EDIT-CONFIG: Invalid value \"%s\" for node \"%s\"\n", content, name);
+                }
                 g_free (content);
                 apteryx_free_tree (tree);
                 _parms->out_error.tag = NC_ERR_TAG_INVALID_VAL;
@@ -875,7 +878,10 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
             {
                 if (_parms->in_is_edit && !sch_validate_pattern (schema, value))
                 {
-                    DEBUG ("Invalid value \"%s\" for node \"%s\"\n", value, name);
+                    if (logging & LOG_EDIT_CONFIG)
+                    {
+                        ERROR ("EDIT-CONFIG: Invalid value \"%s\" for node \"%s\"\n", value, name);
+                    }
                     free (value);
                     apteryx_free_tree (tree);
                     _parms->out_error.tag = NC_ERR_TAG_INVALID_VAL;

@@ -2137,12 +2137,17 @@ handle_edit (struct netconf_session *session, xmlNode * rpc)
         }
     }
 
+    /* Loop through conditions which are stored in the list as path, condition, path, condition, ... */
     for (iter = sch_parm_conditions (parms); iter; iter = g_list_next (iter))
     {
         GList *next = g_list_next (iter);
 
         if (next && !sch_process_condition (g_schema, tree, (char *) iter->data, (char *) next->data))
         {
+            if (logging & LOG_EDIT_CONFIG)
+            {
+                ERROR ("EDIT-CONFIG: Path <%s> failed condition <%s>\n", (char *) iter->data, (char *) next->data);
+            }
             ret = send_rpc_error_full (session, rpc, NC_ERR_TAG_INVALID_VAL, NC_ERR_TYPE_PROTOCOL, NULL, NULL, NULL, true);
             sch_parm_free (parms);
             apteryx_free_tree (tree);
