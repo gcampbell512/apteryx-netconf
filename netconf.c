@@ -50,6 +50,12 @@ static struct _running_ds_lock_t
     gboolean locked;
 } running_ds_lock;
 
+typedef struct _q_param
+{
+    GNode *deepest_leaf;
+    int depth;
+} q_param;
+
 #define NETCONF_BASE_1_0_END "]]>]]>"
 #define NETCONF_BASE_1_1_END "\n##\n"
 #define NETCONF_HELLO_END "hello>]]>]]>"
@@ -897,12 +903,36 @@ get_full_tree ()
 }
 
 static gboolean
-remove_null_data (GNode *node, gpointer data)
+process_subtree_query_leaves (GNode *node, gpointer data)
 {
-    if (node->data == NULL)
+    GNode *qnode;
+    q_param *qparam = (q_param *) data;
+    int depth = 0;
+
+    /* Subtree queries have null or value terminated trees */
+    node = node->parent;
+
+    if (node)
     {
-        g_node_unlink (node);
-        g_node_destroy (node);
+        qnode = node;
+        while (qnode->parent)
+        {
+            qnode = qnode->parent;
+            depth++;
+        }
+        depth++;
+
+        if (g_strcmp0 (APTERYX_NAME(node), "*") == 0)
+        {
+            qparam->deepest_leaf = node;
+            qparam->depth = depth;
+            return true;
+        }
+        else if (depth > qparam->depth)
+        {
+            qparam->deepest_leaf = node;
+            qparam->depth = depth;
+        }
     }
     return false;
 }
@@ -1235,76 +1265,72 @@ check_namespace_set (xmlNode *node, char **ns_href, char **ns_prefix)
     return schema_path;
 }
 
-static gpointer
-copy_node_data (gconstpointer src, gpointer dummy)
+/* Getting the response node with netconf is more complicated than restconf as they can have multiple nodes at
+ * some levels. This routine uses the qnode and works upward to guide the tree node as it works from the top down */
+static GNode*
+get_response_node (GNode *tree, int rdepth, GNode *qnode, sch_node **rschema)
 {
-    char *data = g_strdup (src);
+    GNode *rnode = tree;
+    GNode *child = NULL;
+    int depth = rdepth;
 
-    return data;
-}
-
-static void
-_merge_gnode_nodes (GNode *node1, GNode *node2)
-{
-    GNode *child1;
-    GNode *child2;
-    GNode *copy;
-
-    for (child1 = node1->children; child1; child1 = child1->next)
+    while (--depth && rnode)
     {
-        /* Match child1 to a child of node2. If matched descend down the tree. */
-        for (child2 = node2->children; child2; child2 = child2->next)
+        GNode *children = rnode->children;
+
+        if (children)
         {
-            if (g_strcmp0 (APTERYX_NAME (child2), "*") != 0 &&
-                g_strcmp0 (APTERYX_NAME (child1), APTERYX_NAME (child2)) == 0)
+            GNode *pqnode = qnode;
+            int prdepth = depth;
+            while (pqnode && prdepth > 1)
             {
-                _merge_gnode_nodes (child1, child2);
-                break;
+                if (pqnode->parent)
+                    pqnode = pqnode->parent;
+                prdepth--;
             }
-        }
-    }
 
-    for (child2 = node2->children; child2; child2 = child2->next)
-    {
-        if (g_strcmp0 (APTERYX_NAME (child2), "*") == 0)
-            continue;
-
-        /* Match child2 to a child of node1. If not matched add the child2 tree
-         * to the parent node1. */
-        for (child1 = node1->children; child1; child1 = child1->next)
-        {
-            if (g_strcmp0 (APTERYX_NAME (child1), APTERYX_NAME (child2)) == 0)
+            if (g_strcmp0 (APTERYX_NAME (pqnode), "*") == 0)
                 break;
-        }
 
-        if (!child1)
-        {
-            copy = g_node_copy_deep (child2, copy_node_data, NULL);
-            g_node_append (node1, copy);
+            if (pqnode->parent)
+            {
+                for (child = children; child; child = child->next)
+                {
+                    if (g_strcmp0 (APTERYX_NAME (child), APTERYX_NAME (pqnode)) == 0)
+                    {
+                        break;
+                    }
+                }
+
+                /* If the original query response does not have this part of the query
+                 * add it to the response */
+                if (!child)
+                {
+                    child = g_node_append_data (rnode, g_strdup (APTERYX_NAME (pqnode)));
+                    char *path = apteryx_node_path(child);
+                    sch_node *snode = sch_lookup (g_schema, path);
+                    if (snode)
+                        *rschema = snode;
+                    g_free (path);
+                }
+            }
+            if (child)
+                rnode = child;
+            else
+                rnode = rnode->children;
         }
     }
-}
-
-/* Merge tree2 into tree1. This is done by copying any part of the tree2 that is not in
- * tree1 into tree1. Tree2 is deleted at the end of the merge. */
-static void
-merge_gnode_trees (GNode *tree1, GNode *tree2)
-{
-    if (tree1 && tree2)
-    {
-        _merge_gnode_nodes (tree1, tree2);
-        apteryx_free_tree (tree2);
-    }
+    return rnode;
 }
 
 static bool
 get_query_to_xml (struct netconf_session *session, xmlNode *rpc, GNode *query,
-                  int rdepth, char *path, char **ns_href,
+                  GNode *qnode, int qdepth, char *path, char **ns_href,
                   char **ns_prefix, xpath_type x_type, int schflags,
-                  bool is_subtree, bool is_filter, GList **xml_list)
+                  bool is_subtree, bool is_filter, GList **xml_list,
+                  sch_node *rschema, int rdepth)
 {
     GNode *tree = NULL;
-    GNode *query_defaults = NULL;
     xmlNode *xml = NULL;
 
     /* Query database */
@@ -1334,31 +1360,21 @@ get_query_to_xml (struct netconf_session *session, xmlNode *rpc, GNode *query,
     else if (!is_filter)
         tree = get_full_tree ();
 
-    if (schflags & SCH_F_ADD_DEFAULTS)
+    if (query && (schflags & SCH_F_ADD_DEFAULTS) && rschema)
     {
+        GNode *rnode = NULL;
         if (tree)
-        {
-            sch_traverse_tree (g_schema, NULL, tree, schflags | SCH_F_FILTER_RDEPTH, rdepth);
-            query_defaults = query;
-            g_node_traverse (query_defaults, G_IN_ORDER, G_TRAVERSE_LEAVES, -1, remove_null_data, NULL);
-            query = NULL;
-            sch_traverse_tree (g_schema, NULL, query_defaults, schflags | SCH_F_FILTER_RDEPTH, rdepth);
+            rnode = get_response_node (tree, rdepth, qnode, &rschema);
 
-            /* Merge the results of the search result tree with defaults and the query with defaults */
-            merge_gnode_trees (tree, query_defaults);
-        }
-        else
-        {
-            /* Nothing in the database, but we may have defaults! */
-            tree = query;
-            g_node_traverse (tree, G_IN_ORDER, G_TRAVERSE_LEAVES, -1, remove_null_data, NULL);
-            query = NULL;
-            sch_traverse_tree (g_schema, NULL, tree, schflags | SCH_F_FILTER_RDEPTH, rdepth);
-        }
+        sch_add_defaults (g_schema, rschema, &tree, &query, rnode, qnode, rdepth,
+                          qdepth, schflags);
     }
 
-    if (tree && (schflags & SCH_F_TRIM_DEFAULTS))
-        sch_traverse_tree (g_schema, NULL, tree, schflags | SCH_F_FILTER_RDEPTH, rdepth);
+    if (tree && (schflags & SCH_F_TRIM_DEFAULTS) && rschema)
+    {
+        GNode *rnode = get_response_node (tree, rdepth, qnode, &rschema);
+        sch_traverse_tree (g_schema, rschema, rnode, schflags);
+    }
 
     apteryx_free_tree (query);
 
@@ -1379,27 +1395,93 @@ get_query_schema (struct netconf_session *session, xmlNode *rpc, GNode *query,
                   int schflags, bool is_filter, bool is_subtree, GList **xml_list)
 {
     GNode *qnode = NULL;
+    sch_node *rschema = qschema;
     int qdepth = 0;
+    int rdepth = 1;
+    int diff;
 
     /* Get the depth of the response which is the depth of the query
-        OR the up until the first path wildcard */
+     * or up until the first path wildcard */
     qdepth = g_node_max_height (query);
-    if (is_subtree && qdepth)
-        qdepth--;
-
     qnode = query;
-    while (qnode &&
-            g_node_n_children (qnode) == 1 &&
-            g_strcmp0 (APTERYX_NAME (g_node_first_child (qnode)), "*") != 0)
+    if (is_subtree)
     {
-        qnode = g_node_first_child (qnode);
+        q_param qparam = { 0 };
+
+        /* Subtree queries end with a NULL data node or a value node, reduce the depth of the n-ary to compensate */
+        if (is_subtree)
+        {
+            if (qdepth)
+                qdepth--;
+        }
+        g_node_traverse (qnode, G_IN_ORDER, G_TRAVERSE_LEAVES, -1, process_subtree_query_leaves, &qparam);
+        rdepth = qparam.depth;
+
+        if (qparam.deepest_leaf)
+        {
+            qnode = qparam.deepest_leaf;
+            if (g_strcmp0 (APTERYX_NAME (qparam.deepest_leaf), "*") == 0)
+            {
+                if (qdepth == rdepth)
+                    rdepth--;
+                qdepth--;
+                if (qparam.deepest_leaf->parent)
+                    qnode = qparam.deepest_leaf->parent;
+            }
+        }
+
+        if (qparam.deepest_leaf && sch_node_parent (rschema) && sch_is_list (sch_node_parent (rschema)))
+        {
+            /* We need to present the list rather than the key */
+            rschema = sch_node_parent (rschema);
+            if (rschema && qparam.deepest_leaf->parent)
+            {
+                char *s_name = sch_name (rschema);
+                if (qdepth >= rdepth && g_strcmp0 (s_name, APTERYX_NAME(qparam.deepest_leaf->parent)) != 0)
+                {
+                    qdepth--;
+                    rdepth--;
+                    qnode = qparam.deepest_leaf->parent;
+                }
+                g_free (s_name);
+            }
+        }
+
+        diff = qdepth - rdepth;
+        while (diff--)
+            rschema = sch_node_parent (rschema);
+
+        if (qdepth != rdepth && sch_node_parent (rschema) && sch_is_list (sch_node_parent (rschema)))
+        {
+            /* We need to present the list rather than the key */
+            rschema = sch_node_parent (rschema);
+            rdepth--;
+        }
     }
+    else
+    {
+        while (qnode &&
+                g_node_n_children (qnode) == 1 &&
+                g_strcmp0 (APTERYX_NAME (g_node_first_child (qnode)), "*") != 0)
+        {
+            qnode = g_node_first_child (qnode);
+            rdepth++;
+        }
 
-    while (qnode && qnode->children && qnode->children->data)
-        qnode = qnode->children;
+        diff = qdepth - rdepth;
+        while (diff--)
+            rschema = sch_node_parent (rschema);
 
-    if (qdepth && qnode && g_strcmp0 (APTERYX_NAME (qnode), "*") == 0)
-        qdepth--;
+        if (sch_node_parent (rschema) && sch_is_list (sch_node_parent (rschema)))
+        {
+            /* We need to present the list rather than the key */
+            rschema = sch_node_parent (rschema);
+            rdepth--;
+        }
+
+        while (qnode && qnode->children)
+            qnode = qnode->children;
+    }
 
     /* Without a query we may need to add a wildcard to get everything from here down */
     if (is_filter && qnode && qdepth == g_node_max_height (query) &&
@@ -1416,8 +1498,9 @@ get_query_schema (struct netconf_session *session, xmlNode *rpc, GNode *query,
         }
     }
 
-    return get_query_to_xml (session, rpc, query, qdepth, path, ns_href,
-                             ns_prefix, x_type, schflags, is_subtree, true, xml_list);
+    return get_query_to_xml (session, rpc, query, qnode, qdepth, path, ns_href,
+                             ns_prefix, x_type, schflags, is_subtree, true, xml_list,
+                             rschema, rdepth);
 }
 
 static void
@@ -1559,8 +1642,8 @@ get_process_action (struct netconf_session *session, xmlNode *rpc, xmlNode *node
                 }
                 else if (!query && x_type == XPATH_EVALUATE)
                 {
-                    if (!get_query_to_xml (session, rpc, query, 0, path, &ns_href,
-                                           &ns_prefix, x_type, schflags, false, true, xml_list))
+                    if (!get_query_to_xml (session, rpc, query, NULL, 0, path, &ns_href,
+                                           &ns_prefix, x_type, schflags, false, true, xml_list, NULL, 0))
                     {
                         cleanup_on_xpath_error (session, attr, split, ns_href, ns_prefix, path);
                         return -1;
@@ -1730,8 +1813,8 @@ handle_get (struct netconf_session *session, xmlNode * rpc, gboolean config_only
     /* Catch for get without filter */
     if (!filter_seen && !xml_list)
     {
-        if (!get_query_to_xml (session, rpc, NULL, 0, NULL, NULL, NULL,
-                               XPATH_NONE, schflags, false, false, &xml_list))
+        if (!get_query_to_xml (session, rpc, NULL, NULL, 0, NULL, NULL, NULL,
+                               XPATH_NONE, schflags, false, false, &xml_list, NULL, 0))
         {
             session->counters.in_bad_rpcs++;
             netconf_global_stats.session_totals.in_bad_rpcs++;
