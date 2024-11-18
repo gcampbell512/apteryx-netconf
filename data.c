@@ -725,6 +725,8 @@ _sch_xml_to_gnode (_sch_xml_to_gnode_parms *_parms, sch_node * schema, sch_ns *n
                 g_strcmp0 (new_op, "none") == 0)
             {
                 new_xpath = g_strdup_printf ("%s/%s", old_xpath, key_value);
+                apteryx_free_tree (tree);
+                tree = NULL;
             }
             else
             {
