@@ -1234,6 +1234,27 @@ def test_edit_config_leaf_list_valid_value():
     _edit_config_test(payload, post_xpath='/test/settings/users[name="bob"]', inc_str=['123', '321'])
 
 
+def test_edit_config_leaf_list_merge_and_delete():
+    """
+    Merge one new leaf-list entry and delete an existing one in the same message.
+    """
+    payload = """
+<config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0"
+        xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <test>
+    <settings>
+      <users>
+        <name>bob</name>
+        <groups xc:operation="delete">23</groups>
+        <groups>24</groups>
+      </users>
+    </settings>
+  </test>
+</config>
+"""
+    _edit_config_test(payload, post_xpath='/test/settings/users[name="bob"]', inc_str=['24'], exc_str=['23'])
+
+
 def test_edit_config_list_missing_index():
     """
     Set merge for new animal without an index, expect an error.
