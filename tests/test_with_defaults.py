@@ -705,9 +705,6 @@ def test_with_default_report_all_complex_tree():
       <object>
         <name>fred</name>
         <top-container>
-          <conf>
-            <enabled>true</enabled>
-          </conf>
           <inner-container>
             <conf>
               <enabled>false</enabled>
